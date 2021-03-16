@@ -1,0 +1,17 @@
+[package]
+name = "trav"
+version = "0.1.0"
+authors = ["wojciechkepka <wojtek.kepka@protonmail.com>"]
+edition = "2018"
+
+[lib]
+name = "trav"
+
+[[bin]]
+name = "trav"
+path = "./src/main.rs"
+
+[dependencies]
+tui = { version = "0.14", features = ["termion"] }
+termion = "1"
+anyhow = "1"
