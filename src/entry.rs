@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::SecondsFormat;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
@@ -7,6 +8,8 @@ use tui::{
     text::{Span, Spans},
     widgets::{Block, Borders, List, ListItem},
 };
+
+use crate::util;
 
 #[derive(Debug)]
 pub struct DirEntry {
@@ -50,13 +53,35 @@ impl DirEntry {
                 "🔗"
             };
 
-            lines.push(Spans::from(format!(
-                "{} {}",
-                symbol,
-                self.inner.file_name().to_string_lossy().to_string()
+            lines.push(Spans::from(Span::styled(
+                format!(
+                    "{} {}",
+                    symbol,
+                    self.inner.file_name().to_string_lossy().to_string()
+                ),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             )));
 
-            lines.push(Spans::from(format!("{} B", metadata.len())));
+            let time = if let Ok(time) = metadata.modified() {
+                format!(
+                    "{}",
+                    util::system_time_to_date_time(time).to_rfc3339_opts(SecondsFormat::Secs, true)
+                )
+            } else {
+                String::new()
+            };
+
+            lines.push(Spans::from(vec![
+                Span::styled(time, Style::default().fg(Color::Gray)),
+                Span::styled(
+                    format!(" {}B", metadata.len()),
+                    Style::default()
+                        .fg(Color::Gray)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
         } else {
             lines.push(Spans::from(format!(
                 "{}",
@@ -93,6 +118,7 @@ pub fn styled_file_entries(title: String, entries: Vec<ListItem>) -> List {
         .style(Style::default().bg(Color::Black))
         .highlight_style(
             Style::default()
+                .fg(Color::Yellow)
                 .bg(Color::Blue)
                 .add_modifier(Modifier::BOLD)
                 .add_modifier(Modifier::ITALIC),

@@ -144,7 +144,7 @@ impl TravApp {
                     self.cwd_entries.previous();
                     self.handle_current_entry()?;
                 }
-                Key::Right => {
+                Key::Right | Key::Char('\n') => {
                     self.restart_err();
                     if let Some(entry) = self.cwd_entries.current() {
                         if let Ok(md) = entry.metadata() {
@@ -210,15 +210,18 @@ impl TravApp {
 
     fn render_entry_info(&self, entry: &DirEntry, mut frame: &mut Frame<Backend>, rect: Rect) {
         let _path = entry.path();
-        let path = _path.to_string_lossy().to_string();
+        let name = _path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or(_path.to_string_lossy().to_string());
 
         if let Some(child_entries) = &self.child_entries {
-            render_entries(child_entries.iter(), path, &mut frame, rect);
+            render_entries(child_entries.iter(), name, &mut frame, rect);
         } else {
             let block = Block::default().borders(Borders::ALL).title(Span::styled(
-                path,
+                name,
                 Style::default()
-                    .fg(Color::Magenta)
+                    .fg(Color::LightCyan)
                     .add_modifier(Modifier::BOLD),
             ));
 
