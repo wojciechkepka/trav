@@ -1,23 +1,27 @@
 use anyhow::Result;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
-use std::{env, fs};
+use std::{env, fs, io, process};
 use termion::event::Key;
 use tui::{
-    layout::Alignment,
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, Paragraph},
+    text::Span,
+    widgets::{Block, Borders, ListState, Paragraph},
     Frame,
 };
 
+use crate::entry::{get_ok_entries, styled_file_entries, DirEntry};
 use crate::events::{Event, Events};
-use crate::util::{
-    self, entry_as_list_item, err_paragraph, get_ok_entries, layout, list::StatefulList,
-};
+use crate::util::list::StatefulList;
 use crate::Backend;
 
 pub struct TravApp {
-    pub current_dir: PathBuf,
-    pub entries: StatefulList<fs::DirEntry>,
+    pub cwd_path: PathBuf,
+    pub cwd_entries: StatefulList<DirEntry>,
+    pub parent: Option<(PathBuf, Vec<DirEntry>)>,
+    pub child_entries: Option<Vec<DirEntry>>,
+    pub content: Option<String>,
     pub events: Events,
     pub exit: bool,
     pub err: Option<String>,
@@ -31,38 +35,89 @@ impl TravApp {
             env::current_dir()?
         };
 
-        Ok(TravApp {
+        let mut app = TravApp {
             events: Events::new(),
-            entries: StatefulList::with_items(get_ok_entries(path.as_path())?),
-            current_dir: path,
+            cwd_entries: StatefulList::new(),
+            parent: None,
+            child_entries: None,
+            content: None,
+            cwd_path: path.clone(),
             exit: false,
             err: None,
-        })
+        };
+        app.load_entries(path)?;
+
+        Ok(app)
     }
 
-    pub fn load_entries(&mut self, path: PathBuf) -> Result<()> {
-        self.entries = StatefulList::with_items(get_ok_entries(path.as_path())?);
-        self.current_dir = path;
+    fn load_child_entries(&mut self) -> Result<()> {
+        if let Some(entry) = self.cwd_entries.current() {
+            if let Ok(metadata) = entry.metadata() {
+                let file_type = metadata.file_type();
 
+                if file_type.is_dir() {
+                    self.child_entries = Some(get_ok_entries(entry.path().as_path())?);
+                    return Ok(());
+                }
+            }
+        }
+
+        self.child_entries = None;
         Ok(())
     }
 
-    fn heading(&self) -> Paragraph {
-        Paragraph::new(self.current_dir.to_string_lossy().to_string())
-            .block(Block::default().borders(Borders::ALL))
-            .style(
-                Style::default()
-                    .fg(Color::LightBlue)
-                    .bg(Color::Black)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .alignment(Alignment::Left)
+    pub fn load_entries(&mut self, path: PathBuf) -> Result<()> {
+        self.cwd_entries = StatefulList::with_items(get_ok_entries(path.as_path())?);
+        if let Some(parent) = path.parent() {
+            self.parent = Some((parent.to_path_buf(), get_ok_entries(parent)?));
+        }
+        self.cwd_path = path;
+        self.cwd_entries.next();
+
+        self.load_child_entries()?;
+
+        Ok(())
     }
 
     fn restart_err(&mut self) {
         if self.err.is_some() {
             self.err = None;
         }
+    }
+
+    fn handle_current_entry(&mut self) -> Result<()> {
+        if let Some(entry) = self.cwd_entries.current() {
+            match entry.metadata() {
+                Ok(ref md) => {
+                    let file_type = md.file_type();
+                    if file_type.is_dir() {
+                        self.load_child_entries()?;
+                    } else if file_type.is_symlink() {
+                        if let Ok(entries) = get_ok_entries(entry.path().as_path()) {
+                            self.child_entries = Some(entries);
+                        }
+                    } else if file_type.is_file() {
+                        if let Ok(file) = fs::File::open(entry.path().as_path()) {
+                            let reader = io::BufReader::new(file);
+                            let mut lines = String::new();
+                            for line in reader.lines().take(128) {
+                                if let Ok(line) = line {
+                                    lines.push_str(&line);
+                                    lines.push('\n');
+                                }
+                            }
+
+                            self.content = Some(lines);
+                            self.child_entries = None;
+                            self.err = None;
+                        }
+                    }
+                }
+                Err(e) => self.err = Some(e.to_string()),
+            }
+        }
+
+        Ok(())
     }
 
     pub fn handle_event(&mut self) -> Result<()> {
@@ -73,34 +128,46 @@ impl TravApp {
                 }
                 Key::Left => {
                     self.restart_err();
-                    if let Some(parent) = self.current_dir.parent() {
+                    if let Some(parent) = self.cwd_path.parent() {
                         let parent = parent.to_path_buf();
                         self.load_entries(parent)?;
                     }
+                    self.handle_current_entry()?;
                 }
                 Key::Down => {
                     self.restart_err();
-                    self.entries.next();
+                    self.cwd_entries.next();
+                    self.handle_current_entry()?;
                 }
                 Key::Up => {
                     self.restart_err();
-                    self.entries.previous();
+                    self.cwd_entries.previous();
+                    self.handle_current_entry()?;
                 }
                 Key::Right => {
                     self.restart_err();
-                    if let Some(entry) = self.entries.current() {
-                        match entry.metadata() {
-                            Ok(md) => {
-                                if md.is_dir() {
-                                    let path = entry.path();
-                                    self.load_entries(path)?;
-                                } else {
-                                    self.err = Some("entry is not a directory".to_string());
+                    if let Some(entry) = self.cwd_entries.current() {
+                        if let Ok(md) = entry.metadata() {
+                            let path = entry.path();
+                            let file_type = md.file_type();
+                            if file_type.is_dir() {
+                                self.load_entries(path)?;
+                                return Ok(());
+                            } else if file_type.is_symlink() {
+                                if let Ok(_) = self.load_entries(path) {
+                                    return Ok(());
+                                }
+                            } else if file_type.is_file() {
+                                if let Err(e) = process::Command::new("xdg-open")
+                                    .args(&[entry.path().to_string_lossy().to_string()])
+                                    .spawn()
+                                {
+                                    self.err = Some(e.to_string());
                                 }
                             }
-                            Err(e) => self.err = Some(e.to_string()),
                         }
                     }
+                    self.handle_current_entry()?;
                 }
                 _ => {}
             },
@@ -109,27 +176,124 @@ impl TravApp {
         Ok(())
     }
 
-    pub fn draw_frame(&mut self, mut f: &mut Frame<Backend>) {
-        let entries: Vec<_> = self.entries.items.iter().map(entry_as_list_item).collect();
-        let (error, is_err, file_idx) = if let Some(error) = &self.err {
-            (error.to_string(), true, 2)
-        } else {
-            ("".to_string(), false, 1)
-        };
+    fn render_main_view(&mut self, mut f: &mut Frame<Backend>, rect: Rect) {
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(vec![
+                Constraint::Percentage(33),
+                Constraint::Percentage(33),
+                Constraint::Percentage(33),
+            ])
+            .split(rect);
 
-        let chunks = layout(&mut f, is_err);
-
-        f.render_widget(self.heading(), chunks[0]);
-
-        if is_err {
-            let err = err_paragraph(&error);
-            f.render_widget(err, chunks[1]);
+        if let Some((path, entries)) = &self.parent {
+            render_entries(
+                entries.iter(),
+                path.to_string_lossy().to_string(),
+                &mut f,
+                chunks[0],
+            );
         }
 
-        f.render_stateful_widget(
-            util::styled_file_entries(entries),
-            chunks[file_idx],
-            &mut self.entries.state,
+        render_stateful_entries(
+            self.cwd_entries.items.iter(),
+            self.cwd_path.to_string_lossy().to_string(),
+            &mut self.cwd_entries.state,
+            &mut f,
+            chunks[1],
         );
+
+        if let Some(current) = self.cwd_entries.current() {
+            self.render_entry_info(current, &mut f, chunks[2]);
+        }
     }
+
+    fn render_entry_info(&self, entry: &DirEntry, mut frame: &mut Frame<Backend>, rect: Rect) {
+        let _path = entry.path();
+        let path = _path.to_string_lossy().to_string();
+
+        if let Some(child_entries) = &self.child_entries {
+            render_entries(child_entries.iter(), path, &mut frame, rect);
+        } else {
+            let block = Block::default().borders(Borders::ALL).title(Span::styled(
+                path,
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ));
+
+            let paragraph = if let Some(content) = &self.content {
+                Paragraph::new(content.as_str()).block(block)
+            } else {
+                Paragraph::new("...").block(block)
+            };
+
+            frame.render_widget(paragraph, rect);
+        }
+    }
+
+    pub fn draw_frame(&mut self, mut f: &mut Frame<Backend>) {
+        let error = &self.err;
+        let mut idx = 0;
+
+        let chunks = main_layout(&mut f, error.is_some());
+
+        if let Some(error) = error {
+            render_error_msg(&error, &mut f, chunks[idx]);
+            idx += 1;
+        }
+
+        self.render_main_view(&mut f, chunks[idx]);
+    }
+}
+
+fn render_error_msg<S>(error: S, frame: &mut Frame<Backend>, rect: Rect)
+where
+    S: AsRef<str>,
+{
+    let err = Paragraph::new(error.as_ref())
+        .block(Block::default().borders(Borders::ALL))
+        .style(
+            Style::default()
+                .fg(Color::LightRed)
+                .bg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        )
+        .alignment(Alignment::Left);
+
+    frame.render_widget(err, rect);
+}
+
+fn render_entries<'entry, I>(entries: I, title: String, frame: &mut Frame<Backend>, rect: Rect)
+where
+    I: Iterator<Item = &'entry DirEntry>,
+{
+    let entries: Vec<_> = entries.map(DirEntry::as_list_item).collect();
+    frame.render_widget(styled_file_entries(title, entries), rect);
+}
+
+fn render_stateful_entries<'entry, I>(
+    entries: I,
+    title: String,
+    mut state: &mut ListState,
+    frame: &mut Frame<Backend>,
+    rect: Rect,
+) where
+    I: Iterator<Item = &'entry DirEntry>,
+{
+    let entries: Vec<_> = entries.map(DirEntry::as_list_item).collect();
+    frame.render_stateful_widget(styled_file_entries(title, entries), rect, &mut state);
+}
+
+pub fn main_layout(f: &mut Frame<Backend>, with_error: bool) -> Vec<Rect> {
+    let constraints = if with_error {
+        [Constraint::Min(3), Constraint::Percentage(90)].as_ref()
+    } else {
+        [Constraint::Percentage(97)].as_ref()
+    };
+
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(f.size())
 }

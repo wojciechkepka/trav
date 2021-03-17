@@ -1,4 +1,5 @@
 pub mod app;
+pub mod entry;
 pub mod events;
 pub mod util;
 
