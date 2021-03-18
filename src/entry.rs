@@ -65,10 +65,7 @@ impl DirEntry {
             )));
 
             let time = if let Ok(time) = metadata.modified() {
-                format!(
-                    "{}",
-                    util::system_time_to_date_time(time).to_rfc3339_opts(SecondsFormat::Secs, true)
-                )
+                util::system_time_to_date_time(time).to_rfc3339_opts(SecondsFormat::Secs, true)
             } else {
                 String::new()
             };
@@ -83,10 +80,9 @@ impl DirEntry {
                 ),
             ]));
         } else {
-            lines.push(Spans::from(format!(
-                "{}",
-                self.inner.file_name().to_string_lossy().to_string()
-            )));
+            lines.push(Spans::from(
+                self.inner.file_name().to_string_lossy().to_string(),
+            ));
         }
 
         ListItem::new(lines).style(Style::default().fg(Color::White).bg(Color::Black))

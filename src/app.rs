@@ -154,7 +154,7 @@ impl TravApp {
                                 self.load_entries(path)?;
                                 return Ok(());
                             } else if file_type.is_symlink() {
-                                if let Ok(_) = self.load_entries(path) {
+                                if self.load_entries(path).is_ok() {
                                     return Ok(());
                                 }
                             } else if file_type.is_file() {
@@ -213,7 +213,7 @@ impl TravApp {
         let name = _path
             .file_name()
             .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or(_path.to_string_lossy().to_string());
+            .unwrap_or_else(|| _path.to_string_lossy().to_string());
 
         if let Some(child_entries) = &self.child_entries {
             render_entries(child_entries.iter(), name, &mut frame, rect);
