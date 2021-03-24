@@ -75,8 +75,9 @@ impl DirEntry {
 
             lines.push(Spans::from(vec![
                 Span::styled(time, Style::default().fg(Color::Gray)),
+                Span::raw(" "),
                 Span::styled(
-                    format!(" {}B", metadata.len()),
+                    util::conv_b(metadata.len()),
                     Style::default()
                         .fg(Color::Gray)
                         .add_modifier(Modifier::BOLD),
