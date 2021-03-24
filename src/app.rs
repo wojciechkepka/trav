@@ -219,7 +219,7 @@ impl TravApp {
         let name = _path
             .file_name()
             .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or(_path.to_string_lossy().to_string());
+            .unwrap_or_else(|| _path.to_string_lossy().to_string());
 
         if let Some(child_entries) = &self.child_entries {
             render_entries(child_entries.iter(), name, &mut frame, rect);
