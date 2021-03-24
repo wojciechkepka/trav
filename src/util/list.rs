@@ -20,7 +20,7 @@ impl<T> StatefulList<T> {
         }
     }
 
-    pub fn next(&mut self) {
+    pub fn next(&mut self) -> Option<usize> {
         let i = match self.state.selected() {
             Some(i) => {
                 if i >= self.items.len() - 1 {
@@ -32,9 +32,11 @@ impl<T> StatefulList<T> {
             None => 0,
         };
         self.state.select(Some(i));
+
+        self.current_idx()
     }
 
-    pub fn previous(&mut self) {
+    pub fn previous(&mut self) -> Option<usize> {
         let i = match self.state.selected() {
             Some(i) => {
                 if i == 0 {
@@ -46,6 +48,8 @@ impl<T> StatefulList<T> {
             None => 0,
         };
         self.state.select(Some(i));
+
+        self.current_idx()
     }
 
     pub fn unselect(&mut self) {
@@ -54,5 +58,23 @@ impl<T> StatefulList<T> {
 
     pub fn current(&self) -> Option<&T> {
         Some(&self.items[self.state.selected()?])
+    }
+
+    pub fn current_idx(&self) -> Option<usize> {
+        self.state.selected()
+    }
+
+    pub fn select(&mut self, idx: Option<usize>) {
+        let idx = match idx {
+            Some(i) => {
+                if i >= self.items.len() - 1 {
+                    self.items.len() - 1
+                } else {
+                    i
+                }
+            }
+            None => 0,
+        };
+        self.state.select(Some(idx))
     }
 }
