@@ -6,7 +6,7 @@ use termion::event::Key;
 use tui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::Span,
+    text::{Span, Spans},
     widgets::{Block, Borders, ListState, Paragraph},
     Frame,
 };
@@ -16,10 +16,13 @@ use crate::events::{Event, Events};
 use crate::util::list::StatefulList;
 use crate::Backend;
 
+#[derive(Debug)]
 pub struct TravApp {
     pub cwd_path: PathBuf,
     pub cwd_entries: StatefulList<DirEntry>,
+    pub cwd_idx: Option<usize>,
     pub parent: Option<(PathBuf, Vec<DirEntry>)>,
+    pub parent_idx: Option<usize>,
     pub child_entries: Option<Vec<DirEntry>>,
     pub content: Option<String>,
     pub events: Events,
@@ -36,47 +39,42 @@ impl TravApp {
         };
 
         let mut app = TravApp {
-            events: Events::new(),
+            cwd_path: path.clone(),
             cwd_entries: StatefulList::new(),
+            cwd_idx: None,
             parent: None,
+            parent_idx: None,
             child_entries: None,
             content: None,
-            cwd_path: path.clone(),
+            events: Events::new(),
             exit: false,
             err: None,
         };
-        app.load_entries(path)?;
+        app.load_entries(path, Some(1))?;
+        app.handle_current_entry()?;
 
         Ok(app)
     }
 
-    fn load_child_entries(&mut self) -> Result<()> {
-        if let Some(entry) = self.cwd_entries.current() {
-            if let Ok(metadata) = entry.metadata() {
-                let file_type = metadata.file_type();
-
-                if file_type.is_dir() {
-                    self.child_entries = Some(get_ok_entries(entry.path().as_path())?);
-                    return Ok(());
-                }
-            }
-        }
-
-        self.child_entries = None;
-        Ok(())
-    }
-
-    pub fn load_entries(&mut self, path: PathBuf) -> Result<()> {
+    pub fn load_entries(&mut self, path: PathBuf, idx: Option<usize>) -> Result<()> {
         self.cwd_entries = StatefulList::with_items(get_ok_entries(path.as_path())?);
         if let Some(parent) = path.parent() {
             self.parent = Some((parent.to_path_buf(), get_ok_entries(parent)?));
         }
         self.cwd_path = path;
-        self.cwd_entries.next();
 
-        self.load_child_entries()?;
+        self.cwd_entries.select(idx);
+        self.cwd_idx = self.cwd_entries.current_idx();
 
         Ok(())
+    }
+
+    fn next_entry(&mut self) {
+        self.cwd_idx = self.cwd_entries.next();
+    }
+
+    fn prev_entry(&mut self) {
+        self.cwd_idx = self.cwd_entries.previous();
     }
 
     fn restart_err(&mut self) {
@@ -91,7 +89,8 @@ impl TravApp {
                 Ok(ref md) => {
                     let file_type = md.file_type();
                     if file_type.is_dir() {
-                        self.load_child_entries()?;
+                        self.child_entries = Some(get_ok_entries(entry.path().as_path())?);
+                        return Ok(());
                     } else if file_type.is_symlink() {
                         if let Ok(entries) = get_ok_entries(entry.path().as_path()) {
                             self.child_entries = Some(entries);
@@ -130,18 +129,19 @@ impl TravApp {
                     self.restart_err();
                     if let Some(parent) = self.cwd_path.parent() {
                         let parent = parent.to_path_buf();
-                        self.load_entries(parent)?;
+                        self.load_entries(parent, self.parent_idx)?;
                     }
                     self.handle_current_entry()?;
+                    self.parent_idx = None;
                 }
                 Key::Down => {
                     self.restart_err();
-                    self.cwd_entries.next();
+                    self.next_entry();
                     self.handle_current_entry()?;
                 }
                 Key::Up => {
                     self.restart_err();
-                    self.cwd_entries.previous();
+                    self.prev_entry();
                     self.handle_current_entry()?;
                 }
                 Key::Right | Key::Char('\n') => {
@@ -151,10 +151,16 @@ impl TravApp {
                             let path = entry.path();
                             let file_type = md.file_type();
                             if file_type.is_dir() {
-                                self.load_entries(path)?;
+                                let idx = self.cwd_idx;
+                                self.load_entries(path, Some(0))?;
+                                self.handle_current_entry()?;
+                                self.parent_idx = idx;
                                 return Ok(());
                             } else if file_type.is_symlink() {
-                                if let Ok(_) = self.load_entries(path) {
+                                let idx = self.cwd_idx;
+                                if let Ok(_) = self.load_entries(path, Some(0)) {
+                                    self.handle_current_entry()?;
+                                    self.parent_idx = idx;
                                     return Ok(());
                                 }
                             } else if file_type.is_file() {
@@ -246,7 +252,28 @@ impl TravApp {
             idx += 1;
         }
 
+        //self.render_dbg(&mut f, chunks[idx]);
+        //idx += 1;
+
         self.render_main_view(&mut f, chunks[idx]);
+    }
+
+    #[allow(dead_code)]
+    fn render_dbg(&self, frame: &mut Frame<Backend>, rect: Rect) {
+        let dbg = Paragraph::new(Spans::from(vec![
+            Span::raw(format!("cwd_idx: {:?} ", self.cwd_idx)),
+            Span::raw(format!("parent_idx: {:?}", self.parent_idx)),
+        ]))
+        .block(Block::default().borders(Borders::ALL))
+        .style(
+            Style::default()
+                .fg(Color::LightRed)
+                .bg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        )
+        .alignment(Alignment::Left);
+
+        frame.render_widget(dbg, rect);
     }
 }
 

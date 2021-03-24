@@ -10,11 +10,13 @@ use std::time::Duration;
 use termion::event::Key;
 use termion::input::TermRead;
 
+#[derive(Debug)]
 pub enum Event<I> {
     Input(I),
     Tick,
 }
 
+#[derive(Debug)]
 /// A small event handler that wrap termion input and tick events. Each event
 /// type is handled in its own thread and returned to a common `Receiver`
 pub struct Events {
